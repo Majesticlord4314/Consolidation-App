@@ -32,7 +32,7 @@ consolidation_webapp/
    streamlit run main.py
    ```
 4. **Open in browser**
-   - Follow the Streamlit link (usually http://localhost:8501)
+   - Follow the Streamlit link (http://localhost:8501](https://consolidate.streamlit.app/))
 
 ## CSV Format Requirements
 - **Sales CSV**: Must contain columns: `StoreName`, `ProductCode`, `ProductName`, `Quantity`
