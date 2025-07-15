@@ -101,13 +101,114 @@ try:
 
         # ─── Step 2: Data Cleaning & Preparation ──────────────────────────
         st.header("Step 1: Data Cleaning & Preparation")
-        before = len(df_sales)
-        df_sales = df_sales[
-            ~df_sales['ProductName']
-             .str.lower()
-             .str.contains('apple', na=False)
-        ]
-        st.write(f"Removed {before - len(df_sales)} rows containing 'Apple'")
+        
+        # Extract unique brands for filtering
+        brands_sales = df_sales['BrandName'].dropna().unique() if 'BrandName' in df_sales.columns else []
+        brands_soh = df_soh['Brand'].dropna().unique() if 'Brand' in df_soh.columns else []
+        all_brands = sorted(set(list(brands_sales) + list(brands_soh)))
+        
+        if all_brands:
+            st.subheader("Brand Selection")
+            st.write("Select which brands to include in the analysis:")
+            
+            # Add Check All option
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                check_all = st.checkbox("Check All", value=False, key="check_all")
+            with col2:
+                if st.button("Clear All", key="clear_all"):
+                    for brand in all_brands:
+                        st.session_state[f"brand_{brand}"] = False
+                    st.rerun()
+            
+            # Create columns for checkboxes
+            num_cols = min(4, len(all_brands))
+            cols = st.columns(num_cols)
+            
+            selected_brands = []
+            for i, brand in enumerate(all_brands):
+                col_idx = i % num_cols
+                with cols[col_idx]:
+                    # Set default value based on check_all state
+                    default_value = check_all if f"brand_{brand}" not in st.session_state else st.session_state[f"brand_{brand}"]
+                    if check_all and f"brand_{brand}" not in st.session_state:
+                        st.session_state[f"brand_{brand}"] = True
+                    
+                    if st.checkbox(brand, value=default_value, key=f"brand_{brand}"):
+                        selected_brands.append(brand)
+        
+        # Store Brand Selection
+        st.subheader("Store Brand Selection")
+        st.write("Select which store brands to include in the analysis:")
+        
+        store_brands = ["Bose", "Imagine", "Icare"]
+        
+        # Add Check All option for stores
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            check_all_stores = st.checkbox("Check All Stores", value=False, key="check_all_stores")
+        with col2:
+            if st.button("Clear All Stores", key="clear_all_stores"):
+                for store_brand in store_brands:
+                    st.session_state[f"store_{store_brand}"] = False
+                st.rerun()
+        
+        # Create columns for store checkboxes
+        store_cols = st.columns(3)
+        selected_store_brands = []
+        for i, store_brand in enumerate(store_brands):
+            with store_cols[i]:
+                # Set default value based on check_all_stores state
+                default_value = check_all_stores if f"store_{store_brand}" not in st.session_state else st.session_state[f"store_{store_brand}"]
+                if check_all_stores and f"store_{store_brand}" not in st.session_state:
+                    st.session_state[f"store_{store_brand}"] = True
+                
+                if st.checkbox(store_brand, value=default_value, key=f"store_{store_brand}"):
+                    selected_store_brands.append(store_brand)
+            
+            # Filter data based on selected brands
+            before = len(df_sales)
+            if selected_brands:
+                if 'BrandName' in df_sales.columns:
+                    df_sales = df_sales[df_sales['BrandName'].isin(selected_brands)]
+                if 'Brand' in df_soh.columns:
+                    df_soh = df_soh[df_soh['Brand'].isin(selected_brands)]
+                
+                st.write(f"Included {len(selected_brands)} brands. Kept {len(df_sales)} rows from {before} total sales rows.")
+                st.write(f"Selected brands: {', '.join(selected_brands)}")
+            else:
+                st.warning("No brands selected. Including all data.")
+        else:
+            st.info("No brand information found in the data. Proceeding with all products.")
+        
+        # Filter data based on selected store brands
+        if selected_store_brands:
+            before_sales = len(df_sales)
+            before_soh = len(df_soh)
+            
+            # Create filter conditions for store names
+            def store_filter(store_name, selected_stores):
+                if pd.isna(store_name):
+                    return False
+                store_str = str(store_name).lower()
+                for store_brand in selected_stores:
+                    if store_brand.lower() in store_str:
+                        return True
+                return False
+            
+            # Apply store filtering
+            df_sales = df_sales[df_sales['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
+            df_soh = df_soh[df_soh['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
+            
+            st.write(f"Store filtering: Kept {len(df_sales)} sales rows (from {before_sales}) and {len(df_soh)} SOH rows (from {before_soh})")
+            st.write(f"Selected store brands: {', '.join(selected_store_brands)}")
+        else:
+            st.warning("No store brands selected. Including all stores.")
+            
+        # Final data check
+        if len(df_sales) == 0 or len(df_soh) == 0:
+            st.error("No data remaining after filtering. Please adjust your brand/store selections.")
+            st.stop()
 
         # ─── Step 3: Aggregation ───────────────────────────────────────
         st.header("Step 2: Aggregation")
