@@ -32,24 +32,51 @@ try:
             df_soh.columns    = df_soh.columns.str.strip()
             df_format.columns = df_format.columns.str.strip()
 
-            # Standardize ProductName to uppercase
-            df_sales['ProductName'] = (
-                df_sales['ProductName'].astype(str)
-                         .str.strip()
-                         .str.upper()
-            )
-            df_soh['ProductName'] = (
-                df_soh['ProductName'].astype(str)
-                       .str.strip()
-                       .str.upper()
-            )
+            # Standardize ProductDescription to uppercase
+            if 'ProductDescription' in df_sales.columns:
+                df_sales['ProductDescription'] = (
+                    df_sales['ProductDescription'].astype(str)
+                             .str.strip()
+                             .str.upper()
+                )
+            if 'ProductDescription' in df_soh.columns:
+                df_soh['ProductDescription'] = (
+                    df_soh['ProductDescription'].astype(str)
+                           .str.strip()
+                           .str.upper()
+                )
+            
+            # Also standardize ProductName for backup
+            if 'ProductName' in df_sales.columns:
+                df_sales['ProductName'] = (
+                    df_sales['ProductName'].astype(str)
+                             .str.strip()
+                             .str.upper()
+                )
+            if 'ProductName' in df_soh.columns:
+                df_soh['ProductName'] = (
+                    df_soh['ProductName'].astype(str)
+                           .str.strip()
+                           .str.upper()
+                )
 
             # Validate required columns
-            for col in ['StoreName','ProductCode','ProductName','Quantity']:
+            required_sales = ['StoreName','ProductCode','Quantity']
+            required_soh = ['StoreName','ProductCode','ActualStock']
+            
+            # Check for ProductDescription or ProductName
+            if 'ProductDescription' not in df_sales.columns and 'ProductName' not in df_sales.columns:
+                st.error("Missing in Sales CSV: ProductDescription or ProductName")
+                st.stop()
+            if 'ProductDescription' not in df_soh.columns and 'ProductName' not in df_soh.columns:
+                st.error("Missing in SOH CSV: ProductDescription or ProductName")
+                st.stop()
+                
+            for col in required_sales:
                 if col not in df_sales.columns:
                     st.error(f"Missing in Sales CSV: {col}")
                     st.stop()
-            for col in ['StoreName','ProductCode','ProductName','ActualStock']:
+            for col in required_soh:
                 if col not in df_soh.columns:
                     st.error(f"Missing in SOH CSV: {col}")
                     st.stop()
@@ -212,6 +239,11 @@ try:
 
         # ─── Step 3: Aggregation ───────────────────────────────────────
         st.header("Step 2: Aggregation")
+        
+        # Determine which product column to use
+        product_col_sales = 'ProductDescription' if 'ProductDescription' in df_sales.columns else 'ProductName'
+        product_col_soh = 'ProductDescription' if 'ProductDescription' in df_soh.columns else 'ProductName'
+        
         sales_agg = (
             df_sales
               .groupby(['StoreName','ProductCode'], as_index=False)
@@ -235,10 +267,13 @@ try:
         sales_agg['Sales'] = pd.to_numeric(sales_agg['Sales'], errors='coerce').fillna(0)
         soh_agg['Stock']   = pd.to_numeric(soh_agg['Stock'],   errors='coerce').fillna(0)
 
-        prod_lookup = pd.concat([
-            df_sales[['ProductCode','ProductName']],
-            df_soh[['ProductCode','ProductName']]
-        ]).drop_duplicates('ProductCode')
+        # Create product lookup using ProductDescription if available, else ProductName
+        prod_lookup_sales = df_sales[['ProductCode', product_col_sales]].drop_duplicates('ProductCode')
+        prod_lookup_soh = df_soh[['ProductCode', product_col_soh]].drop_duplicates('ProductCode')
+        
+        # Combine and prioritize ProductDescription
+        prod_lookup = pd.concat([prod_lookup_sales.rename(columns={product_col_sales: 'ProductDescription'}), 
+                                prod_lookup_soh.rename(columns={product_col_soh: 'ProductDescription'})]).drop_duplicates('ProductCode', keep='first')
 
         agg_summary = pd.DataFrame({
             'Metric': [
@@ -279,7 +314,7 @@ try:
             left_on='Part No', right_on='ProductCode', how='left'
         )
         df_merged.drop('ProductCode', axis=1, inplace=True)
-        df_merged.rename(columns={'ProductName':'Product'}, inplace=True)
+        df_merged.rename(columns={'ProductDescription':'Product'}, inplace=True)
         df_merged['Forecast_Demand'] = df_merged['Sales']
         st.dataframe(df_merged.head())
 
@@ -319,11 +354,11 @@ try:
                 qty   = min(avail, rem)
                 if qty > 0:
                     movements.append(dict(
-                        ProductName=prod_map[part],
-                        Product=part,
-                        Source=src,
-                        Destination=dest,
-                        Quantity=qty
+                    ProductDescription=prod_map[part],
+                    Product=part,
+                    Source=src,
+                    Destination=dest,
+                    Quantity=qty
                     ))
                     available[(src, part)] -= qty
                     rem -= qty
@@ -342,7 +377,7 @@ try:
                     qty   = min(avail, rem)
                     if qty>0:
                         movements.append(dict(
-                            ProductName=prod_map[part],
+                            ProductDescription=prod_map[part],
                             Product=part,
                             Source=src,
                             Destination=dest,
