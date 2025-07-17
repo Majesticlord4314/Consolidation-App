@@ -213,22 +213,29 @@ try:
             before_sales = len(df_sales)
             before_soh = len(df_soh)
             
-            # Create filter conditions for store names
-            def store_filter(store_name, selected_stores):
-                if pd.isna(store_name):
+            try:
+                # Create filter conditions for store names
+                def store_filter(store_name, selected_stores):
+                    if pd.isna(store_name):
+                        return False
+                    store_str = str(store_name).lower()
+                    for store_brand in selected_stores:
+                        if store_brand.lower() in store_str:
+                            return True
                     return False
-                store_str = str(store_name).lower()
-                for store_brand in selected_stores:
-                    if store_brand.lower() in store_str:
-                        return True
-                return False
-            
-            # Apply store filtering
-            df_sales = df_sales[df_sales['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
-            df_soh = df_soh[df_soh['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
-            
-            st.write(f"Store filtering: Kept {len(df_sales)} sales rows (from {before_sales}) and {len(df_soh)} SOH rows (from {before_soh})")
-            st.write(f"Selected store brands: {', '.join(selected_store_brands)}")
+                
+                # Apply store filtering
+                df_sales = df_sales[df_sales['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
+                df_soh = df_soh[df_soh['StoreName'].apply(lambda x: store_filter(x, selected_store_brands))]
+                
+                st.write(f"Store filtering: Kept {len(df_sales)} sales rows (from {before_sales}) and {len(df_soh)} SOH rows (from {before_soh})")
+                st.write(f"Selected store brands: {', '.join(selected_store_brands)}")
+            except Exception as e:
+                st.error(f"Error in store filtering: {e}")
+                st.write("Debug info:")
+                st.write(f"Selected store brands: {selected_store_brands}")
+                st.write(f"Sales data shape before filtering: {before_sales}")
+                st.write(f"SOH data shape before filtering: {before_soh}")
         else:
             st.warning("No store brands selected. Including all stores.")
             
@@ -267,13 +274,34 @@ try:
         sales_agg['Sales'] = pd.to_numeric(sales_agg['Sales'], errors='coerce').fillna(0)
         soh_agg['Stock']   = pd.to_numeric(soh_agg['Stock'],   errors='coerce').fillna(0)
 
-        # Create product lookup using ProductDescription if available, else ProductName
-        prod_lookup_sales = df_sales[['ProductCode', product_col_sales]].drop_duplicates('ProductCode')
-        prod_lookup_soh = df_soh[['ProductCode', product_col_soh]].drop_duplicates('ProductCode')
+        # Create product lookup with both ProductName and ProductDescription
+        sales_lookup_cols = ['ProductCode']
+        soh_lookup_cols = ['ProductCode']
         
-        # Combine and prioritize ProductDescription
-        prod_lookup = pd.concat([prod_lookup_sales.rename(columns={product_col_sales: 'ProductDescription'}), 
-                                prod_lookup_soh.rename(columns={product_col_soh: 'ProductDescription'})]).drop_duplicates('ProductCode', keep='first')
+        # Add available columns from sales data
+        if 'ProductName' in df_sales.columns:
+            sales_lookup_cols.append('ProductName')
+        if 'ProductDescription' in df_sales.columns:
+            sales_lookup_cols.append('ProductDescription')
+            
+        # Add available columns from SOH data
+        if 'ProductName' in df_soh.columns:
+            soh_lookup_cols.append('ProductName')
+        if 'ProductDescription' in df_soh.columns:
+            soh_lookup_cols.append('ProductDescription')
+        
+        prod_lookup_sales = df_sales[sales_lookup_cols].drop_duplicates('ProductCode')
+        prod_lookup_soh = df_soh[soh_lookup_cols].drop_duplicates('ProductCode')
+        
+        # Merge lookups to get both columns
+        prod_lookup = pd.merge(prod_lookup_sales, prod_lookup_soh, on='ProductCode', how='outer', suffixes=('_sales', '_soh'))
+        
+        # Create final ProductName and ProductDescription columns
+        prod_lookup['ProductName'] = prod_lookup.get('ProductName_sales', prod_lookup.get('ProductName_soh', prod_lookup.get('ProductName', '')))
+        prod_lookup['ProductDescription'] = prod_lookup.get('ProductDescription_sales', prod_lookup.get('ProductDescription_soh', prod_lookup.get('ProductDescription', '')))
+        
+        # Keep only the necessary columns
+        prod_lookup = prod_lookup[['ProductCode', 'ProductName', 'ProductDescription']].fillna('')
 
         agg_summary = pd.DataFrame({
             'Metric': [
@@ -314,7 +342,8 @@ try:
             left_on='Part No', right_on='ProductCode', how='left'
         )
         df_merged.drop('ProductCode', axis=1, inplace=True)
-        df_merged.rename(columns={'ProductDescription':'Product'}, inplace=True)
+        # Keep both ProductName and ProductDescription, but use ProductDescription as primary Product column
+        df_merged['Product'] = df_merged['ProductDescription'].fillna(df_merged['ProductName'])
         df_merged['Forecast_Demand'] = df_merged['Sales']
         st.dataframe(df_merged.head())
 
@@ -323,6 +352,8 @@ try:
         stock_lu = {(r.Store,r['Part No']):r.Stock for _,r in df_merged.iterrows()}
         sales_lu = {(r.Store,r['Part No']):r.Sales for _,r in df_merged.iterrows()}
         prod_map = {r['Part No']:r.Product for _,r in df_merged.iterrows()}
+        prod_name_map = {r['Part No']:r.get('ProductName', '') for _,r in df_merged.iterrows()}
+        prod_desc_map = {r['Part No']:r.get('ProductDescription', '') for _,r in df_merged.iterrows()}
 
         warehouse_by_prod = {}
         stores_by_prod    = {}
@@ -354,8 +385,10 @@ try:
                 qty   = min(avail, rem)
                 if qty > 0:
                     movements.append(dict(
-                    ProductDescription=prod_map[part],
-                    Product=part,
+                    ProductName=prod_name_map.get(part, ''),
+                    ProductDescription=prod_desc_map.get(part, ''),
+                    Product=prod_map[part],
+                    Part_No=part,
                     Source=src,
                     Destination=dest,
                     Quantity=qty
@@ -377,8 +410,10 @@ try:
                     qty   = min(avail, rem)
                     if qty>0:
                         movements.append(dict(
-                            ProductDescription=prod_map[part],
-                            Product=part,
+                            ProductName=prod_name_map.get(part, ''),
+                            ProductDescription=prod_desc_map.get(part, ''),
+                            Product=prod_map[part],
+                            Part_No=part,
                             Source=src,
                             Destination=dest,
                             Quantity=qty
@@ -392,17 +427,22 @@ try:
         # ─── Compile & Display Results ─────────────────────────────────
         result = pd.DataFrame(movements)
         if not result.empty:
-            # Enrich with metrics
-            result['From SOH']   = result.apply(lambda r: stock_lu[(r.Source, r.Product)], axis=1)
-            result['To SOH']     = result.apply(lambda r: stock_lu[(r.Destination, r.Product)], axis=1)
-            result['From Sales'] = result.apply(lambda r: sales_lu[(r.Source, r.Product)], axis=1)
-            result['To Sales']   = result.apply(lambda r: sales_lu[(r.Destination, r.Product)], axis=1)
+            try:
+                # Enrich with metrics
+                result['From SOH']   = result.apply(lambda r: stock_lu.get((r.Source, r.Part_No), 0), axis=1)
+                result['To SOH']     = result.apply(lambda r: stock_lu.get((r.Destination, r.Part_No), 0), axis=1)
+                result['From Sales'] = result.apply(lambda r: sales_lu.get((r.Source, r.Part_No), 0), axis=1)
+                result['To Sales']   = result.apply(lambda r: sales_lu.get((r.Destination, r.Part_No), 0), axis=1)
+            except Exception as e:
+                st.error(f"Error enriching results: {e}")
+                st.write("Available columns in result:", list(result.columns))
+                st.write("Sample movement data:", result.head().to_dict() if not result.empty else "No data")
 
         st.header("Movement Summary")
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Movements", len(result))
         c2.metric("Total Qty to Transfer", int(result['Quantity'].sum()) if not result.empty else 0)
-        c3.metric("Unique Products", result['Product'].nunique() if not result.empty else 0)
+        c3.metric("Unique Products", result['Part_No'].nunique() if not result.empty else 0)
 
         st.subheader("Detailed Movements Preview")
         st.dataframe(result.head(50))
@@ -433,7 +473,7 @@ try:
         with st.expander("Analysis Summary", expanded=False):
             st.write(f"**Total movements:** {len(result)}")
             st.write(f"**Sum of quantity to transfer:** {int(result['Quantity'].sum()) if not result.empty else 0}")
-            st.write(f"**Unique products:** {result['Product'].nunique() if not result.empty else 0}")
+            st.write(f"**Unique products:** {result['Part_No'].nunique() if not result.empty else 0}")
             st.write(f"**Unique sources:** {result['Source'].nunique() if not result.empty else 0}")
             st.write(f"**Unique destinations:** {result['Destination'].nunique() if not result.empty else 0}")
         with st.expander("Full Detailed Movements Table", expanded=False):
